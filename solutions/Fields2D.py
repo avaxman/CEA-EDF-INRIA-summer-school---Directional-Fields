@@ -45,7 +45,7 @@ def compute_face_quantities(vertices, faces):
     normals /= (2.0 * faceAreas[:, np.newaxis])
 
     basisX = vectors1
-    basisX = basisX / np.linalg.norm(basisX)
+    basisX = basisX / np.linalg.norm(basisX, axis=1,  keepdims=True)
     basisY = np.cross(normals, basisX)
     return normals, faceAreas, basisX, basisY
 
@@ -135,22 +135,22 @@ def power_to_extrinsic(N, powerField, inFaces, basisX, basisY):
     extField = np.zeros([powerField.shape[0], 3 * N])
     repField = np.exp(np.log(powerField) / N)
     for i in range(0, N):
-        currField = repField * cmath.exp(i * cmath.pi / N * 1j)
+        currField = repField * cmath.exp(2*i * cmath.pi / N * 1j)
         extField[:, 3 * i:3 * i + 3] = np.real(currField) * basisX + np.imag(currField) * basisY
 
     return extField
 
 
-def interpolate_power_field(constField2D, constFaces, vertices, faces, edges, EF, basisX, basisY):
+def interpolate_power_field(N, constField2D, constFaces, vertices, faces, edges, EF, basisX, basisY):
     # creating the connection
     edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
-    edgeVectorsFace1 = extrinsic_to_power(1, edgeVectors, EF[:, 0], basisX, basisY)
-    edgeVectorsFace2 = extrinsic_to_power(1, edgeVectors, EF[:, 2], basisX, basisY)
+    edgeVectorsFace1 = extrinsic_to_power(N, edgeVectors, EF[:, 0], basisX, basisY)
+    edgeVectorsFace2 = extrinsic_to_power(N, edgeVectors, EF[:, 2], basisX, basisY)
 
     # preparing constraints and linear system
-    crossFieldConst = constField2D ** 4
+    crossFieldConst = constField2D #np.exp(np.log(constField2D) * 4)
     rows = np.column_stack((np.arange(0, edges.shape[0]), np.arange(0, edges.shape[0])))
-    cols = EF[:, [0,2]]
+    cols = EF[:, [0, 2]]
     values = np.column_stack([-np.conj(edgeVectorsFace1), np.conj(edgeVectorsFace2)])
     A = coo_matrix((values.flatten(), (rows.flatten(), cols.flatten())), shape=(EF.shape[0], faces.shape[0]))
     A = A.tocsr()
@@ -178,11 +178,12 @@ if __name__ == '__main__':
 
     # set to the first edge of each face
     constField3D = vertices[faces[constFaces, 2], :] - vertices[faces[constFaces, 1], :]
+    constField3D /= np.linalg.norm(constField3D, axis=1,  keepdims=True)
 
     # in complex coordinates
     constField2D = extrinsic_to_power(4, constField3D, constFaces, basisX, basisY)
 
-    crossField = interpolate_power_field(constField2D, constFaces, vertices, faces, edges, EF, basisX, basisY)
+    crossField = interpolate_power_field(4, constField2D, constFaces, vertices, faces, edges, EF, basisX, basisY)
 
     extField = power_to_extrinsic(4, crossField, range(0, faces.shape[0]), basisX, basisY)
 
