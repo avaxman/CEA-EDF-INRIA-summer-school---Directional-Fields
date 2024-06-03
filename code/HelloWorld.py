@@ -18,6 +18,8 @@ def load_off_file(file_path):
     return vertices, faces
 
 
+
+
 if __name__ == '__main__':
     ps.init()
 
