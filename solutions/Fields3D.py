@@ -6,7 +6,27 @@ from scipy.sparse import coo_matrix, csc_matrix
 from scipy.sparse.linalg import spsolve
 import cmath
 import meshio
+from scipy.special import sph_harm
 
+
+def wigner_matrix(rotation_matrix, j):
+    size = 2 * j + 1
+    d_matrix = np.zeros((size, size), dtype=complex)
+
+    for m in range(-j, j + 1):
+        for mp in range(max(-j, m - j), min(j, m + j) + 1):  # Corrected range for mp
+            # Compute the diagonal matrix element
+            diag_element = np.sqrt(np.arange((j - abs(m)) * (j + abs(m) + 1)))
+
+            # Ensure diag_element has at least one element to avoid shape mismatch
+            if diag_element.size == 0:
+                diag_element = np.array([1.0])
+
+            d_matrix[m + j, mp + j] = np.conj(sph_harm(m, j, 0, 0)) * np.dot(
+                rotation_matrix, np.diag(diag_element)
+            ) @ sph_harm(mp, j, 0, 0)
+
+    return d_matrix
 
 def accumarray(indices, values):
     output = np.zeros((np.max(indices) + 1), dtype=values.dtype)
@@ -17,7 +37,6 @@ def accumarray(indices, values):
     np.add.at(output, indFlat, valFlat)
 
     return output
-
 
 def load_tet_mesh(filename):
     mesh = meshio.read(filename)
@@ -96,55 +115,11 @@ def compute_topology(vertices, tets):
     return halffaces, faces, faceBoundMask, boundVertices, boundFaces, FH, FT
 
 
-def get_singularities(N, powerField, vertices, edges, faces, tets):
-    # angle defect
-    K = compute_angle_defect(vertices, faces).reshape(-1, 1)
-
-    # d0 operator
-    rows = np.arange(0, edges.shape[0])
-    rows = np.tile(rows[:, np.newaxis], 2)
-    values = np.full((edges.shape[0], 2), [-1, 1])
-    d0 = csc_matrix((values.flatten(), (rows.flatten(), edges.flatten())), shape=(edges.shape[0], vertices.shape[0]))
-
-    # computing effort
-    edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
-    edgeVectorsFace1 = extrinsic_to_power(N, edgeVectors, EF[:, 0], basisX, basisY)
-    edgeVectorsFace2 = extrinsic_to_power(N, edgeVectors, EF[:, 2], basisX, basisY)
-
-    expEffort = (powerField[EF[:, 2]] * np.conj(edgeVectorsFace2)) / (powerField[EF[:, 0]] * np.conj(edgeVectorsFace1))
-    effort = np.imag(np.log(expEffort))
-
-    indices = (d0.T * effort + N * K) / (2 * np.pi)
-    singVertices = np.column_stack(np.nonzero(np.round(indices)))[:, 0]
-    singIndices = np.round(indices)[singVertices]
-    return singVertices, singIndices
+def shortest_rotation(R1, R2):
+    return R1.T @ R2
 
 
-def interpolate_SPH_field(constFieldSPH, constTets, vertices, edges, faces, tets, FT):
-    # creating the connection
-    edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
-    edgeVectorsFace1 = extrinsic_to_power(N, edgeVectors, EF[:, 0], basisX, basisY)
-    edgeVectorsFace2 = extrinsic_to_power(N, edgeVectors, EF[:, 2], basisX, basisY)
-
-    # preparing constraints and linear system
-    crossFieldConst = constField2D  # np.exp(np.log(constField2D) * 4)
-    rows = np.column_stack((np.arange(0, edges.shape[0]), np.arange(0, edges.shape[0])))
-    cols = EF[:, [0, 2]]
-    values = np.column_stack([-np.conj(edgeVectorsFace1), np.conj(edgeVectorsFace2)])
-    A = coo_matrix((values.flatten(), (rows.flatten(), cols.flatten())), shape=(EF.shape[0], faces.shape[0]))
-    A = A.tocsr()
-    AConst = A[:, constFaces]
-    varFaces = [i for i in range(A.shape[1]) if i not in constFaces]
-    AVar = A[:, varFaces]
-    b = -AConst * crossFieldConst
-    crossFieldFull = np.zeros([faces.shape[0], 1], dtype=np.complex128)
-    crossFieldFull[constFaces] = crossFieldConst
-    crossFieldFull[varFaces] = spsolve(np.dot(np.conj(AVar.T), AVar), np.conj(AVar.T).dot(b)).reshape(-1, 1)
-
-    return crossFieldFull
-
-
-def interpolate_octahedral_field(constField3D, constBoundFaces, vertices, edge, faces, tets, FT, boundFaces,
+def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT, boundFaces,
                                  boundNormals, boundBasisX, boundBasisY):
     # creating the constraints on the boundary tets
     vc = np.sqrt(5 / 12) * np.array([1, 0, 0, 0, 0, 0, 0, 0, 1]).T
@@ -153,17 +128,18 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, vertices, edge, 
 
     # constructing boundary tet function
     boundTets = FT[boundFaces, 0]
-    u0 = np.zeros([len(boundTets), 1])
+    v0 = np.zeros([len(boundTets), 1])
     Hc = np.zeros([9 * len(boundTets), len(boundTets)])
     Hs = np.zeros([9 * len(boundTets), len(boundTets)])
     for constIndex in range(0, len(boundTets)):
-        Rn = shortest_rotation(np.identity(3), np.array(boundBasisX[constBoundFaces[constIndex], :],
-                                                        boundBasisY[constBoundFace[constIndex], :],
-                                                        boundNormals[constBoundFaces[constIndex], :]).T)
-        WRn = wigner(Rn)
-        u0[9 * constIndex:9 * constIndex + 9] = WRn @ nl
-        Hc[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vc
-        Hs[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vs
+        Rn = shortest_rotation(np.identity(3), np.array([boundBasisX[constIndex, :],
+                                                         boundBasisY[constIndex, :],
+                                                         boundNormals[constIndex, :]]).T)
+
+        WRn = wigner_matrix(Rn, 4)
+        v0[9 * constIndex:9 * constIndex + 9] = WRn @ vn.reshape(-1,1)
+        Hc[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vc.reshape(-1,1)
+        Hs[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vs.reshape(-1,1)
 
     # getting the values for the constrained faces
     cConst = np.zeros([len(constBoundFaces), 1])
@@ -173,11 +149,12 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, vertices, edge, 
         sConst[constIndex] = np.dot(constField3D[constIndex, :], boundBasisY[constBoundFaces[constIndex], :])
 
     # Abstracting constraints
+    varBoundFaces = np.setdiff1d(range(0, len(boundTets)), constBoundFaces)
     HcVar = Hc[:, varBoundFaces]
     HcConst = Hc[:, constBoundFaces]
     HsVar = Hs[:, varBoundFaces]
     HsConst = Hs[:, constBoundFaces]
-    A = np.column_stack(HcVar, HsVar);
+    A = np.column_stack([HcVar, HsVar])
     b = v0 + HcConst * cConst + HsConst * sConst
 
     # Constructing the differential operator for the dirichlet energy
@@ -187,9 +164,26 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, vertices, edge, 
     values = np.full((innerFaces.shape[0], 2), [-1, 1])
     d2 = coo_matrix((values.flatten(), (rows.flatten(), cols.flatten())), shape=(innerFaces.shape[0], tets.shape[0]))
 
+    innerTets = np.setdiff1d(range(0, tets.shape[0]), boundTets)
     d2Inner = d2[:, innerTets]
     d2Bound = d2[:, boundTets]
-    E = 
+    E = np.column_stack([d2Inner, d2Bound @ A]);
+    f = d2Bound @ b
+    x = spsolve(E.T @ E, -E.T @ f)
+    uInner = x[0:9 * len(innerTets)];
+    cs = x[9 * len(innerTets):]
+    uBound = A @ cs + b
+
+    SPHField = np.zeros([tets.shape[0], 9])
+    SPHField[innerTets, :] = uInner.reshape(len(innerTets), 9)
+    SPHField[boundTets, :] = uBound.reshape(len(boundTets), 9)
+
+    return SPHField
+
+
+def SPH_to_euclidean(SPHField):
+    extField = np.zeros([SPHField.shape[0], 18])
+    return extField
 
 
 if __name__ == '__main__':
@@ -197,28 +191,19 @@ if __name__ == '__main__':
 
     vertices, boundFaces, tets = load_tet_mesh(os.path.join('..', 'data', 'bone_80k.mesh'))
 
-    #
-
     halffaces, faces, faceBoundMask, boundVertices, boundFaces, FH, FT = compute_topology(vertices, tets)
 
-    boundNormals, boundFaceAreas, basisX, basisY = compute_face_quantities(vertices, boundFaces)
+    boundNormals, boundFaceAreas, boundBasisX, boundBasisY = compute_face_quantities(vertices, boundFaces)
 
     # N = 4
     constBoundFaces = [1, 1000, 2000, 3000]
-    constField3D = vertices[faces[constFaces, 2], :] - vertices[faces[constFaces, 1], :]
+    constField3D = vertices[boundFaces[constBoundFaces, 2], :] - vertices[boundFaces[constBoundFaces, 1], :]
     constField3D /= np.linalg.norm(constField3D, axis=1, keepdims=True)
 
-    SPHField = interpolate_octahedral_field(constField3D, constBoundFaces, vertices, edge, faces, tets, FT, boundFaces,
-                                            basisX, basisY)
+    SPHField = interpolate_octahedral_field(constField3D, constBoundFaces,faces, tets, FT, boundFaces,
+                                            boundNormals, boundBasisX, boundBasisY)
 
-    extField = SPH_to_Euclidean(SPHField)
-
-    # in complex coordinates
-    # constField2D = extrinsic_to_power(N, constField3D, constFaces, basisX, basisY)
-
-    # crossField = interpolate_power_field(N, constField2D, constFaces, vertices, faces, edges, EF, basisX, basisY)
-
-    # extField = power_to_extrinsic(N, crossField, range(0, faces.shape[0]), basisX, basisY)
+    extField = SPH_to_euclidean(SPHField)
 
     ps_mesh = ps.register_volume_mesh("Tet Mesh", vertices, tets)
 
