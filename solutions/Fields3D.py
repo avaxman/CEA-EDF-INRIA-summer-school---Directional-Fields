@@ -9,24 +9,94 @@ import meshio
 from scipy.special import sph_harm
 
 
-def wigner_matrix(rotation_matrix, j):
-    size = 2 * j + 1
-    d_matrix = np.zeros((size, size), dtype=complex)
+def OctaTensorGradient(q, x, y, z):
+    n = len(x)
+    assert n == q.shape[1]
 
-    for m in range(-j, j + 1):
-        for mp in range(max(-j, m - j), min(j, m + j) + 1):  # Corrected range for mp
-            # Compute the diagonal matrix element
-            diag_element = np.sqrt(np.arange((j - abs(m)) * (j + abs(m) + 1)))
+    q = q.T
 
-            # Ensure diag_element has at least one element to avoid shape mismatch
-            if diag_element.size == 0:
-                diag_element = np.array([1.0])
+    dx = [
+        2 * np.pi ** (-1 / 2) * x * (x ** 2 + y ** 2 + z ** 2),
+        (-3 / 4) * (35 * np.pi ** (-1)) ** (1 / 2) * y * (-3 * x ** 2 + y ** 2),
+        (9 / 2) * ((35 / 2) * np.pi ** (-1)) ** (1 / 2) * x * y * z,
+        (-3 / 4) * (5 * np.pi ** (-1)) ** (1 / 2) * y * (3 * x ** 2 + y ** 2 - 6 * z ** 2),
+        (-9 / 2) * ((5 / 2) * np.pi ** (-1)) ** (1 / 2) * x * y * z,
+        (9 / 4) * np.pi ** (-1 / 2) * x * (x ** 2 + y ** 2 - 4 * z ** 2),
+        (3 / 4) * ((5 / 2) * np.pi ** (-1)) ** (1 / 2) * z * (-9 * x ** 2 - 3 * y ** 2 + 4 * z ** 2),
+        (-3 / 2) * (5 * np.pi ** (-1)) ** (1 / 2) * x * (x ** 2 - 3 * z ** 2),
+        (9 / 4) * ((35 / 2) * np.pi ** (-1)) ** (1 / 2) * (x ** 2 - y ** 2) * z,
+        (3 / 4) * (35 * np.pi ** (-1)) ** (1 / 2) * (x ** 3 - 3 * x * y ** 2)
+    ]
 
-            d_matrix[m + j, mp + j] = np.conj(sph_harm(m, j, 0, 0)) * np.dot(
-                rotation_matrix, np.diag(diag_element)
-            ) @ sph_harm(mp, j, 0, 0)
+    dy = [
+        2 * np.pi ** (-1 / 2) * y * (x ** 2 + y ** 2 + z ** 2),
+        (3 / 4) * (35 * np.pi ** (-1)) ** (1 / 2) * x * (x ** 2 - 3 * y ** 2),
+        (9 / 4) * ((35 / 2) * np.pi ** (-1)) ** (1 / 2) * (x ** 2 - y ** 2) * z,
+        (-3 / 4) * (5 * np.pi ** (-1)) ** (1 / 2) * x * (x ** 2 + 3 * y ** 2 - 6 * z ** 2),
+        (3 / 4) * ((5 / 2) * np.pi ** (-1)) ** (1 / 2) * z * (-3 * x ** 2 - 9 * y ** 2 + 4 * z ** 2),
+        (9 / 4) * np.pi ** (-1 / 2) * y * (x ** 2 + y ** 2 - 4 * z ** 2),
+        (-9 / 2) * ((5 / 2) * np.pi ** (-1)) ** (1 / 2) * x * y * z,
+        (3 / 2) * (5 * np.pi ** (-1)) ** (1 / 2) * y * (y ** 2 - 3 * z ** 2),
+        (-9 / 2) * ((35 / 2) * np.pi ** (-1)) ** (1 / 2) * x * y * z,
+        (-3 / 4) * (35 * np.pi ** (-1)) ** (1 / 2) * (3 * x ** 2 * y - y ** 3)
+    ]
 
-    return d_matrix
+    dz = [
+        2 * np.pi ** (-1 / 2) * z * (x ** 2 + y ** 2 + z ** 2),
+        np.zeros([n, 1]),
+        (-3 / 4) * ((35 / 2) * np.pi ** (-1)) ** (1 / 2) * y * (-3 * x ** 2 + y ** 2),
+        9 * (5 * np.pi ** (-1)) ** (1 / 2) * x * y * z,
+        (-9 / 4) * ((5 / 2) * np.pi ** (-1)) ** (1 / 2) * y * (x ** 2 + y ** 2 - 4 * z ** 2),
+        np.pi ** (-1 / 2) * ((-9) * x ** 2 * z - 9 * y ** 2 * z + 6 * z ** 3),
+        (-9 / 4) * ((5 / 2) * np.pi ** (-1)) ** (1 / 2) * x * (x ** 2 + y ** 2 - 4 * z ** 2),
+        (9 / 2) * (5 * np.pi ** (-1)) ** (1 / 2) * (x ** 2 - y ** 2) * z,
+        (3 / 4) * ((35 / 2) * np.pi ** (-1)) ** (1 / 2) * x * (x ** 2 - 3 * y ** 2),
+        np.zeros([n, 1])
+    ]
+
+    dx = np.stack(dx, axis=1).squeeze()
+    dy = np.stack(dy, axis=1).squeeze()
+    dz = np.stack(dz, axis=1).squeeze()
+
+    grad = np.stack((np.sum(q * dx, axis=1), np.sum(q * dy, axis=1), np.sum(q * dz, axis=1)), axis=1)
+
+    return grad
+
+
+def Octa2Frames(q):
+    n = q.shape[1]
+
+    q = np.vstack([(np.sqrt(189) / 4) * np.ones((1, n)), q / np.linalg.norm(q, ord=2, axis=0)])
+
+    v1 = np.random.randn(n, 3)
+    v2 = np.random.randn(n, 3)
+    delta = 1
+    eps = np.finfo(float).eps
+
+    while delta > np.power(eps, 0.9) * np.sqrt(n):
+        x = v1[:, 0][:, np.newaxis]
+        y = v1[:, 1][:, np.newaxis]
+        z = v1[:, 2][:, np.newaxis]
+
+        w1 = OctaTensorGradient(q, x, y, z)
+
+        x = v2[:, 0][:, np.newaxis]
+        y = v2[:, 1][:, np.newaxis]
+        z = v2[:, 2][:, np.newaxis]
+
+        w2 = OctaTensorGradient(q, x, y, z)
+
+        v1 = w1 / np.linalg.norm(w1, ord=2, axis=1, keepdims=True)
+        v2 = w2 - np.sum(w2 * v1, axis=1, keepdims=True) * v1
+        v2 = v2 / np.linalg.norm(v2, ord=2, axis=1, keepdims=True)
+        delta = np.linalg.norm(v1 - v1, 'fro')
+
+    v3 = np.cross(v1, v2)
+
+    frames = np.stack((v1.T, v2.T, v3.T), axis=1)
+
+    return frames
+
 
 def accumarray(indices, values):
     output = np.zeros((np.max(indices) + 1), dtype=values.dtype)
@@ -37,6 +107,7 @@ def accumarray(indices, values):
     np.add.at(output, indFlat, valFlat)
 
     return output
+
 
 def load_tet_mesh(filename):
     mesh = meshio.read(filename)
@@ -137,9 +208,9 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT,
                                                          boundNormals[constIndex, :]]).T)
 
         WRn = wigner_matrix(Rn, 4)
-        v0[9 * constIndex:9 * constIndex + 9] = WRn @ vn.reshape(-1,1)
-        Hc[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vc.reshape(-1,1)
-        Hs[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vs.reshape(-1,1)
+        v0[9 * constIndex:9 * constIndex + 9] = WRn @ vn.reshape(-1, 1)
+        Hc[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vc.reshape(-1, 1)
+        Hs[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vs.reshape(-1, 1)
 
     # getting the values for the constrained faces
     cConst = np.zeros([len(constBoundFaces), 1])
@@ -195,12 +266,15 @@ if __name__ == '__main__':
 
     boundNormals, boundFaceAreas, boundBasisX, boundBasisY = compute_face_quantities(vertices, boundFaces)
 
+    q = np.random.randn(9, 10)
+    R = Octa2Frames(q)
+
     # N = 4
     constBoundFaces = [1, 1000, 2000, 3000]
     constField3D = vertices[boundFaces[constBoundFaces, 2], :] - vertices[boundFaces[constBoundFaces, 1], :]
     constField3D /= np.linalg.norm(constField3D, axis=1, keepdims=True)
 
-    SPHField = interpolate_octahedral_field(constField3D, constBoundFaces,faces, tets, FT, boundFaces,
+    SPHField = interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT, boundFaces,
                                             boundNormals, boundBasisX, boundBasisY)
 
     extField = SPH_to_euclidean(SPHField)
