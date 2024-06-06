@@ -146,6 +146,14 @@ def ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True):
     return q
 
 
+def wigner_matrix(rotMat):
+    r = Rotation.from_matrix(rotMat)
+    axisAngles = np.tile(r.as_rotvec(), (9, 1))
+    q = np.identity(9)
+    W = ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True)
+    return W
+
+
 
 def OctaTensorGradient(q, x, y, z):
     n = len(x)
@@ -249,14 +257,14 @@ def accumarray(indices, values):
 
 def load_tet_mesh(filename):
     mesh = meshio.read(filename)
-    boundF = mesh.cells[0].data if mesh.cells[0].type == 'triangle' else mesh.cells[1].data
+    #boundF = mesh.cells[0].data if mesh.cells[0].type == 'triangle' else mesh.cells[1].data
     for i in range(0, len(mesh.cells)):
         if (mesh.cells[i].type == 'tetra'):
             tets = mesh.cells[i].data
 
     vertices = mesh.points
 
-    return vertices, boundF, tets
+    return vertices, tets
 
 
 def compute_face_quantities(vertices, faces):
@@ -315,7 +323,7 @@ def compute_topology(vertices, tets):
     halffaceBoundaryMask[firstOccurence] = 2 - numOccurences
     faceBoundMask = halffaceBoundaryMask[np.sort(firstOccurence)]
 
-    boundFaces = faces[faceBoundMask == 1, :]
+    boundFaces = np.array(np.where(faceBoundMask == 1)[0]).astype(int)
     boundVertices = np.unique(boundFaces).flatten()
 
     FH = createFH(faces, halffaces)
@@ -324,9 +332,9 @@ def compute_topology(vertices, tets):
     return halffaces, faces, faceBoundMask, boundVertices, boundFaces, FH, FT
 
 
+
 def shortest_rotation(R1, R2):
     return R1.T @ R2
-
 
 def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT, boundFaces,
                                  boundNormals, boundBasisX, boundBasisY):
@@ -337,7 +345,7 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT,
 
     # constructing boundary tet function
     boundTets = FT[boundFaces, 0]
-    v0 = np.zeros([len(boundTets), 1])
+    v0 = np.zeros([9 * len(boundTets), 1])
     Hc = np.zeros([9 * len(boundTets), len(boundTets)])
     Hs = np.zeros([9 * len(boundTets), len(boundTets)])
     for constIndex in range(0, len(boundTets)):
@@ -345,10 +353,10 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT,
                                                          boundBasisY[constIndex, :],
                                                          boundNormals[constIndex, :]]).T)
 
-        WRn = wigner_matrix(Rn, 4)
+        WRn = wigner_matrix(Rn)
         v0[9 * constIndex:9 * constIndex + 9] = WRn @ vn.reshape(-1, 1)
-        Hc[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vc.reshape(-1, 1)
-        Hs[9 * constIndex:9 * constIndex + 9, boundTets[constIndex]] = WRn @ vs.reshape(-1, 1)
+        Hc[9 * constIndex:9 * constIndex + 9, constIndex] = (WRn @ vc.reshape(-1, 1)).flatten()
+        Hs[9 * constIndex:9 * constIndex + 9, constIndex] = (WRn @ vs.reshape(-1, 1)).flatten()
 
     # getting the values for the constrained faces
     cConst = np.zeros([len(constBoundFaces), 1])
@@ -364,22 +372,23 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT,
     HsVar = Hs[:, varBoundFaces]
     HsConst = Hs[:, constBoundFaces]
     A = np.column_stack([HcVar, HsVar])
-    b = v0 + HcConst * cConst + HsConst * sConst
+    b = v0.reshape(-1, 1) + HcConst @ cConst.reshape(-1, 1) + HsConst @ sConst.reshape(-1, 1)
 
     # Constructing the differential operator for the dirichlet energy
     innerFaces = np.setdiff1d(range(0, faces.shape[0]), boundFaces)
     rows = np.column_stack((np.arange(0, innerFaces.shape[0]), np.arange(0, innerFaces.shape[0])))
-    cols = FT[innerFaces, [0, 2]]
+    cols = FT[innerFaces[:, np.newaxis], [0, 2]]
     values = np.full((innerFaces.shape[0], 2), [-1, 1])
     d2 = coo_matrix((values.flatten(), (rows.flatten(), cols.flatten())), shape=(innerFaces.shape[0], tets.shape[0]))
+    d2 = d2.tocsr()
 
-    innerTets = np.setdiff1d(range(0, tets.shape[0]), boundTets)
+    innerTets = [i for i in range(tets.shape[0]) if i not in boundTets]
     d2Inner = d2[:, innerTets]
     d2Bound = d2[:, boundTets]
-    E = np.column_stack([d2Inner, d2Bound @ A]);
+    E = np.column_stack([d2Inner, d2Bound @ A])
     f = d2Bound @ b
     x = spsolve(E.T @ E, -E.T @ f)
-    uInner = x[0:9 * len(innerTets)];
+    uInner = x[0:9 * len(innerTets)]
     cs = x[9 * len(innerTets):]
     uBound = A @ cs + b
 
@@ -398,24 +407,22 @@ def SPH_to_euclidean(SPHField):
 if __name__ == '__main__':
     ps.init()
 
-    vertices, boundFaces, tets = load_tet_mesh(os.path.join('..', 'data', 'bone_80k.mesh'))
+    vertices, tets = load_tet_mesh(os.path.join('..', 'data', '78322_gear.2.mesh'))
 
     halffaces, faces, faceBoundMask, boundVertices, boundFaces, FH, FT = compute_topology(vertices, tets)
 
-    boundNormals, boundFaceAreas, boundBasisX, boundBasisY = compute_face_quantities(vertices, boundFaces)
+    boundNormals, boundFaceAreas, boundBasisX, boundBasisY = compute_face_quantities(vertices, faces[boundFaces, :])
 
     # testing ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True)
     Lx, Ly, Lz, YZ = load_SO3_generators_Y4()
-    axisAngles = np.array([0.8147, 0.9058, 0.1270])
-    q = np.array([0.9134, 0.6324, 0.0975, 0.2785, 0.5469, 0.9575, 0.9649, 0.1576, 0.9706]).T
-    W = ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True)
+
 
     # q = np.random.randn(9, 10)
     # R = Octa2Frames(q)
 
     # N = 4
-    constBoundFaces = [1, 1000, 2000, 3000]
-    constField3D = vertices[boundFaces[constBoundFaces, 2], :] - vertices[boundFaces[constBoundFaces, 1], :]
+    constBoundFaces = np.array([1, 1000, 2000, 3000]).astype(int)
+    constField3D = vertices[faces[boundFaces[constBoundFaces], 2], :] - vertices[faces[boundFaces[constBoundFaces], 1], :]
     constField3D /= np.linalg.norm(constField3D, axis=1, keepdims=True)
 
     SPHField = interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT, boundFaces,
