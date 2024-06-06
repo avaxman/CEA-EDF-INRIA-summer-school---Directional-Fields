@@ -4,9 +4,147 @@ import polyscope.imgui as psim
 import numpy as np
 from scipy.sparse import coo_matrix, csc_matrix
 from scipy.sparse.linalg import spsolve
-import cmath
 import meshio
-from scipy.special import sph_harm
+from scipy.spatial.transform import Rotation
+from scipy.linalg import expm
+
+# Persistent variables
+cachedLx, cachedLy, cachedLz, cachedYZ = None, None, None, None
+
+
+def load_SO3_generators_Y4():
+    global cachedLx, cachedLy, cachedLz, cachedYZ
+
+    if cachedLx is None:
+        cachedLx = np.array([
+            [0, 0, 0, 0, 0, 0, 0, -2 ** 0.5, 0],
+            [0, 0, 0, 0, 0, 0, -(7 / 2) ** 0.5, 0, -2 ** 0.5],
+            [0, 0, 0, 0, 0, -3 * 2 ** -0.5, 0, -(7 / 2) ** 0.5, 0],
+            [0, 0, 0, 0, -10 ** 0.5, 0, -3 * 2 ** -0.5, 0, 0],
+            [0, 0, 0, 10 ** 0.5, 0, 0, 0, 0, 0],
+            [0, 0, 3 * 2 ** -0.5, 0, 0, 0, 0, 0, 0],
+            [0, (7 / 2) ** 0.5, 0, 3 * 2 ** -0.5, 0, 0, 0, 0, 0],
+            [2 ** 0.5, 0, (7 / 2) ** 0.5, 0, 0, 0, 0, 0, 0],
+            [0, 2 ** 0.5, 0, 0, 0, 0, 0, 0, 0]
+        ])
+
+        cachedLy = np.array([
+            [0, 2 ** 0.5, 0, 0, 0, 0, 0, 0, 0],
+            [-2 ** 0.5, 0, (7 / 2) ** 0.5, 0, 0, 0, 0, 0, 0],
+            [0, -(7 / 2) ** 0.5, 0, 3 * 2 ** -0.5, 0, 0, 0, 0, 0],
+            [0, 0, -3 * 2 ** -0.5, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, -10 ** 0.5, 0, 0, 0],
+            [0, 0, 0, 0, 10 ** 0.5, 0, -3 * 2 ** -0.5, 0, 0],
+            [0, 0, 0, 0, 0, 3 * 2 ** -0.5, 0, -(7 / 2) ** 0.5, 0],
+            [0, 0, 0, 0, 0, 0, (7 / 2) ** 0.5, 0, -2 ** 0.5],
+            [0, 0, 0, 0, 0, 0, 0, 2 ** 0.5, 0]
+        ])
+
+        cachedLz = np.array([
+            [0, 0, 0, 0, 0, 0, 0, 0, 4],
+            [0, 0, 0, 0, 0, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0, 0, 2, 0, 0],
+            [0, 0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, -1, 0, 0, 0, 0, 0],
+            [0, 0, -2, 0, 0, 0, 0, 0, 0],
+            [0, -3, 0, 0, 0, 0, 0, 0, 0],
+            [-4, 0, 0, 0, 0, 0, 0, 0, 0]
+        ])
+
+        cachedYZ = expm((np.pi / 2) * cachedLx)
+
+    return cachedLx, cachedLy, cachedLz, cachedYZ
+
+
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
+def expLz(ang, band, q, qr):
+    return np.cos(ang * band) * q - np.sin(ang * band) * qr
+
+def expLzT(ang, band, q, qr):
+    return np.cos(ang * band) * q + np.sin(ang * band) * qr
+
+
+def cart2sph(x, y, z):
+    hxy = np.hypot(x, y)
+    az = np.arctan2(y, x)
+    el = np.arctan2(z, hxy)
+    r = np.hypot(hxy, z)
+    return az, el, r
+
+def ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True):
+    # Implements the exponential map in representations of SO(3).
+    # Multiplies each column of q by the exponential of the
+    # Lie algebra element in the corresponding row of axisAngles.
+
+    bandIdx = YZ.shape[0] // 2
+    bands = np.arange(-bandIdx, bandIdx + 1)
+
+    # Extract angles
+    if q.ndim == 1:
+        q = q[:, np.newaxis]
+    bandIdx = YZ.shape[0] // 2
+    bands = np.arange(-bandIdx, bandIdx + 1)
+
+    if axisAngles.ndim == 1:
+        axisAngles = axisAngles[np.newaxis, :]
+
+    # Extract angles
+    az, el, rot = cart2sph(axisAngles[:, 0], axisAngles[:, 1], axisAngles[:, 2])
+    preservedIdx = (rot == 0)
+    qPreserved = q[:, preservedIdx]
+    el = np.pi / 2 - el
+
+    gpuflag = False
+
+    if not gpuflag:
+        azAngs = np.outer(bands, az)
+        elAngs = np.outer(bands, el)
+        rotAngs = np.outer(bands, rot)
+        cosAz = np.cos(azAngs)
+        sinAz = np.sin(azAngs)
+        cosEl = np.cos(elAngs)
+        sinEl = np.sin(elAngs)
+        cosRot = np.cos(rotAngs)
+        sinRot = np.sin(rotAngs)
+
+    # Rotate axis to [0, 0, 1]'
+    if gpuflag:
+        q = np.array([expLzT(a, bands, q[:, i], np.flipud(q[:, i])) for i, a in enumerate(az)]).transpose(1, 2, 0)
+    else:
+        q = cosAz * q + sinAz * np.flipud(q)
+    q = np.dot(YZ, q)
+    if gpuflag:
+        q = np.array([expLzT(e, bands, q[:, i], np.flipud(q[:, i])) for i, e in enumerate(el)]).transpose(1, 2, 0)
+    else:
+        q = cosEl * q + sinEl * np.flipud(q)
+    q = np.dot(YZ.T, q)
+
+    if not rotateNorthOnly:
+        # Rotate around [0, 0, 1]'
+        if gpuflag:
+            q = np.array([expLz(r, bands, q[:, i], np.flipud(q[:, i])) for i, r in enumerate(rot)]).transpose(1, 2, 0)
+        else:
+            q = cosRot * q - sinRot * np.flipud(q)
+
+        # Rotate [0, 0, 1]' back to axis
+        q = np.dot(YZ, q)
+        if gpuflag:
+            q = np.array([expLz(e, bands, q[:, i], np.flipud(q[:, i])) for i, e in enumerate(el)]).transpose(1, 2, 0)
+        else:
+            q = cosEl * q - sinEl * np.flipud(q)
+        q = np.dot(YZ.T, q)
+        if gpuflag:
+            q = np.array([expLz(a, bands, q[:, i], np.flipud(q[:, i])) for i, a in enumerate(az)]).transpose(1, 2, 0)
+        else:
+            q = cosAz * q - sinAz * np.flipud(q)
+
+        q[:, preservedIdx] = qPreserved
+
+    return q
+
 
 
 def OctaTensorGradient(q, x, y, z):
@@ -266,8 +404,14 @@ if __name__ == '__main__':
 
     boundNormals, boundFaceAreas, boundBasisX, boundBasisY = compute_face_quantities(vertices, boundFaces)
 
-    q = np.random.randn(9, 10)
-    R = Octa2Frames(q)
+    # testing ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True)
+    Lx, Ly, Lz, YZ = load_SO3_generators_Y4()
+    axisAngles = np.array([0.8147, 0.9058, 0.1270])
+    q = np.array([0.9134, 0.6324, 0.0975, 0.2785, 0.5469, 0.9575, 0.9649, 0.1576, 0.9706]).T
+    W = ExpSO3(axisAngles, q, YZ, rotateNorthOnly=True)
+
+    # q = np.random.randn(9, 10)
+    # R = Octa2Frames(q)
 
     # N = 4
     constBoundFaces = [1, 1000, 2000, 3000]
