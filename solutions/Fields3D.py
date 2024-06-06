@@ -7,6 +7,7 @@ from scipy.sparse.linalg import spsolve
 import meshio
 from scipy.spatial.transform import Rotation
 from scipy.linalg import expm
+from scipy.sparse import kron, eye, hstack
 
 # Persistent variables
 cachedLx, cachedLy, cachedLz, cachedYZ = None, None, None, None
@@ -385,12 +386,14 @@ def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT,
     innerTets = [i for i in range(tets.shape[0]) if i not in boundTets]
     d2Inner = d2[:, innerTets]
     d2Bound = d2[:, boundTets]
-    E = np.column_stack([d2Inner, d2Bound @ A])
+    d2Inner = kron(d2Inner, eye(9))
+    d2Bound = kron(d2Bound, eye(9))
+    E = hstack([d2Inner, d2Bound @ A])
     f = d2Bound @ b
     x = spsolve(E.T @ E, -E.T @ f)
     uInner = x[0:9 * len(innerTets)]
     cs = x[9 * len(innerTets):]
-    uBound = A @ cs + b
+    uBound = A @ cs.reshape(-1,1) + b
 
     SPHField = np.zeros([tets.shape[0], 9])
     SPHField[innerTets, :] = uInner.reshape(len(innerTets), 9)
@@ -407,7 +410,7 @@ def SPH_to_euclidean(SPHField):
 if __name__ == '__main__':
     ps.init()
 
-    vertices, tets = load_tet_mesh(os.path.join('..', 'data', '78322_gear.2.mesh'))
+    vertices, tets = load_tet_mesh(os.path.join('..', 'data', 'cyl248.mesh'))
 
     halffaces, faces, faceBoundMask, boundVertices, boundFaces, FH, FT = compute_topology(vertices, tets)
 
@@ -421,7 +424,7 @@ if __name__ == '__main__':
     # R = Octa2Frames(q)
 
     # N = 4
-    constBoundFaces = np.array([1, 1000, 2000, 3000]).astype(int)
+    constBoundFaces = np.array([1, 20 ,50 ,100]).astype(int)
     constField3D = vertices[faces[boundFaces[constBoundFaces], 2], :] - vertices[faces[boundFaces[constBoundFaces], 1], :]
     constField3D /= np.linalg.norm(constField3D, axis=1, keepdims=True)
 
@@ -433,7 +436,7 @@ if __name__ == '__main__':
     ps_mesh = ps.register_volume_mesh("Tet Mesh", vertices, tets)
 
     for i in range(0, 6):
-        ps_mesh.add_vector_quantity("field" + str(i), extField[:, 3 * i:3 * i + 3], defined_on='tets')
+        ps_mesh.add_vector_quantity("field" + str(i), extField[:, 3 * i:3 * i + 3], defined_on='cells')
 
     # singVertices, singIndices = get_singularities(4, crossField, vertices, faces, edges, basisX, basisY)
 
