@@ -155,7 +155,6 @@ def wigner_matrix(rotMat):
     return W
 
 
-
 def OctaTensorGradient(q, x, y, z):
     n = len(x)
     assert n == q.shape[1]
@@ -217,6 +216,8 @@ def Octa2Frames(q):
 
     v1 = np.random.randn(n, 3)
     v2 = np.random.randn(n, 3)
+    #v1 = np.array([1.4172, 0.6715, -1.2075]).reshape(-1,1).T
+    #v2 = np.array([0.7172, 1.6302, 0.4889]).reshape(-1,1).T
     delta = 1
     eps = np.finfo(float).eps
 
@@ -227,16 +228,16 @@ def Octa2Frames(q):
 
         w1 = OctaTensorGradient(q, x, y, z)
 
-        x = v2[:, 0][:, np.newaxis]
-        y = v2[:, 1][:, np.newaxis]
-        z = v2[:, 2][:, np.newaxis]
+        x2 = v2[:, 0][:, np.newaxis]
+        y2 = v2[:, 1][:, np.newaxis]
+        z2 = v2[:, 2][:, np.newaxis]
 
-        w2 = OctaTensorGradient(q, x, y, z)
+        w2 = OctaTensorGradient(q, x2, y2, z2)
 
         v1 = w1 / np.linalg.norm(w1, ord=2, axis=1, keepdims=True)
         v2 = w2 - np.sum(w2 * v1, axis=1, keepdims=True) * v1
         v2 = v2 / np.linalg.norm(v2, ord=2, axis=1, keepdims=True)
-        delta = np.linalg.norm(v1 - v1, 'fro')
+        delta = np.linalg.norm(v1 - np.column_stack([x, y, z]), 'fro')
 
     v3 = np.cross(v1, v2)
 
@@ -340,7 +341,7 @@ def shortest_rotation(R1, R2):
 def interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT, boundFaces,
                                  boundNormals, boundBasisX, boundBasisY):
     # creating the constraints on the boundary tets
-    vc = np.sqrt(5 / 12) * np.array([1, 0, 0, 0, 0, 0, 0, 0, 1]).T
+    vc = np.sqrt(5 / 12) * np.array([0, 0, 0, 0, 0, 0, 0, 0, 1]).T
     vs = np.sqrt(5 / 12) * np.array([1, 0, 0, 0, 0, 0, 0, 0, 0]).T
     vn = np.sqrt(7 / 12) * np.array([0, 0, 0, 0, 1, 0, 0, 0, 0]).T
 
@@ -410,7 +411,7 @@ def SPH_to_euclidean(SPHField):
 if __name__ == '__main__':
     ps.init()
 
-    vertices, tets = load_tet_mesh(os.path.join('..', 'data', 'cyl248.mesh'))
+    vertices, tets = load_tet_mesh(os.path.join('..', 'data', 'cube86.mesh'))
 
     halffaces, faces, faceBoundMask, boundVertices, boundFaces, FH, FT = compute_topology(vertices, tets)
 
@@ -420,23 +421,30 @@ if __name__ == '__main__':
     Lx, Ly, Lz, YZ = load_SO3_generators_Y4()
 
 
-    # q = np.random.randn(9, 10)
-    # R = Octa2Frames(q)
+    #q = np.array([0.5793, 0, 0, 0, 0.7638, 0, 0, 0, 0.2847]).reshape(-1,1)
+    #R = Octa2Frames(q)
 
     # N = 4
-    constBoundFaces = np.array([1, 20 ,50 ,100]).astype(int)
-    constField3D = vertices[faces[boundFaces[constBoundFaces], 2], :] - vertices[faces[boundFaces[constBoundFaces], 1], :]
+    # constBoundFaces = np.array([0 ,10 ,40 ,60]).astype(int)
+    constBoundFaces = np.arange(len(boundFaces))
+    # constField3D = vertices[faces[boundFaces[constBoundFaces], 2], :] - vertices[faces[boundFaces[constBoundFaces], 1], :]
+    constField3D = np.tile([1.0 ,0.0 ,0.0], (len(boundFaces),1))
     constField3D /= np.linalg.norm(constField3D, axis=1, keepdims=True)
 
     SPHField = interpolate_octahedral_field(constField3D, constBoundFaces, faces, tets, FT, boundFaces,
                                             boundNormals, boundBasisX, boundBasisY)
 
-    extField = SPH_to_euclidean(SPHField)
+    extField = Octa2Frames(SPHField.T)
 
+    #Visualization
     ps_mesh = ps.register_volume_mesh("Tet Mesh", vertices, tets)
+    barycenters = (vertices[tets[:, 0],:]+vertices[tets[:, 1],:]+vertices[tets[:, 2],:]+vertices[tets[:, 3],:])/4
+    ps_cloud = ps.register_point_cloud("vector centers", barycenters)
 
-    for i in range(0, 6):
-        ps_mesh.add_vector_quantity("field" + str(i), extField[:, 3 * i:3 * i + 3], defined_on='cells')
+
+    for i in range(0, 3):
+        ps_cloud.add_vector_quantity("field" + str(2*i), extField[:, i, :].squeeze().T)
+        ps_cloud.add_vector_quantity("field" + str(2*i+1), -extField[:, i, :].squeeze().T)
 
     # singVertices, singIndices = get_singularities(4, crossField, vertices, faces, edges, basisX, basisY)
 
