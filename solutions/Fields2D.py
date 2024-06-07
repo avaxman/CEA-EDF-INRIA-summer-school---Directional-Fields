@@ -169,8 +169,8 @@ def get_singularities(N, powerField, vertices, faces, edges, basisX, basisY):
 
     # computing effort
     edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
-    edgeVectorsFace1 = extrinsic_to_power(N, edgeVectors, EF[:, 0], basisX, basisY)
-    edgeVectorsFace2 = extrinsic_to_power(N, edgeVectors, EF[:, 1], basisX, basisY)
+    edgeVectorsFace1 = extrinsic_to_power(N,  EF[:, 0], edgeVectors, basisX, basisY)
+    edgeVectorsFace2 = extrinsic_to_power(N, EF[:, 1], edgeVectors, basisX, basisY)
 
     expEffort = (powerField[EF[:, 1]] * np.conj(edgeVectorsFace2)) / (powerField[EF[:, 0]] * np.conj(edgeVectorsFace1))
     effort = np.imag(np.log(expEffort))
@@ -189,12 +189,12 @@ def get_singularities(N, powerField, vertices, faces, edges, basisX, basisY):
 def interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edges, EF, basisX, basisY):
     # creating the connection
     edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
-    edgeVectorsFace1 = extrinsic_to_power(N, edgeVectors, EF[:, 0], basisX, basisY)
-    edgeVectorsFace2 = extrinsic_to_power(N, edgeVectors, EF[:, 1], basisX, basisY)
+    edgeVectorsFace1 = extrinsic_to_power(N, EF[:, 0], edgeVectors, basisX, basisY)
+    edgeVectorsFace2 = extrinsic_to_power(N, EF[:, 1], edgeVectors, basisX, basisY)
 
     # preparing constraints and linear system
     rows = np.column_stack((np.arange(0, edges.shape[0]), np.arange(0, edges.shape[0])))
-    cols = EF[:, [0, 2]]
+    cols = EF
     values = np.column_stack([-np.conj(edgeVectorsFace1), np.conj(edgeVectorsFace2)])
     A = coo_matrix((values.flatten(), (rows.flatten(), cols.flatten())), shape=(EF.shape[0], faces.shape[0]))
     A = A.tocsr()
@@ -223,10 +223,12 @@ def get_biggest_dihedral(vertices, edges, EF, faces, normals):
 
     # Find the 5% sharpest edges and allocating the edge vectors to the adjacent faces
     constEdges = np.where(np.abs(dihedralAngle) >= threshold)[0]
-    constFaces = np.reshape(EF[constEdges, :], (2 * len(constEdges), 1))
+    constFaces = np.reshape(EF[constEdges, :], (2 * len(constEdges), 1)).flatten()
     extField = np.reshape(np.tile(vertices[edges[constEdges, 1], :] - vertices[edges[constEdges, 0], :], (1, 2)), (2 * len(constEdges), 3))
 
-    #checking normals are
+    #checking normals are orthogonal to field
+    # constNormals = normals[constFaces,:]
+    # fieldNormalDot = np.sum(constNormals * extField, axis = 1)
     return constFaces, extField
 
 
@@ -248,7 +250,7 @@ if __name__ == '__main__':
     fullPowerField = interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edges, EF, basisX, basisY)
 
     # Getting back the extrinsic R^3 field
-    extField = power_to_extrinsic(N, fullPowerField, range(0, faces.shape[0]), basisX, basisY)
+    extField = power_to_extrinsic(N, range(0, faces.shape[0]), fullPowerField, basisX, basisY)
 
     # Extracting ingularities
     singVertices, singIndices = get_singularities(4, fullPowerField, vertices, faces, edges, basisX, basisY)
@@ -264,6 +266,6 @@ if __name__ == '__main__':
     ps_cloud.add_scalar_quantity("Indices", singIndices.flatten(), vminmax=(-N, N), enabled=True)
 
     ps_cloud = ps.register_point_cloud("Constrained Faces", barycenters[constFaces, :])
-    ps_mesh.add_vector_quantity("Input Field", constExtField, defined_on='faces')
+    ps_cloud.add_vector_quantity("Input Field", constExtField)
 
     ps.show()
