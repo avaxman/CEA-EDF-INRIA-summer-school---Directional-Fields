@@ -7,6 +7,7 @@ from scipy.sparse.linalg import spsolve
 import cmath
 
 
+#Helper function to compute_angle_defect()---ignore
 def accumarray(indices, values):
     output = np.zeros((np.max(indices) + 1), dtype=values.dtype)
     indFlat = indices.flatten()
@@ -18,6 +19,7 @@ def accumarray(indices, values):
     return output
 
 
+#Loading an OFF file, and producing vertices and faces
 def load_off_file(file_path):
     with open(file_path, 'r') as file:
         lines = file.readlines()
@@ -31,7 +33,14 @@ def load_off_file(file_path):
     return vertices, faces
 
 
-def compute_face_quantities(vertices, faces):
+#input:
+# |V|x3 vertices (double)
+# |F|x3 faces (triangles in mesh; indices into "vertices").
+#output:
+# normals: |F|x3 face normals (normalized)
+# faceAreas: |F| face areas
+# basisX, basisY: |F|x3 (for each), an (arbitrary) orthonormal basis per face
+def compute_geometric_quantities(vertices, faces):
     face_vertices = vertices[faces]
 
     # Compute vectors on the face
@@ -50,17 +59,7 @@ def compute_face_quantities(vertices, faces):
     return normals, faceAreas, basisX, basisY
 
 
-def visualize_boundary_Edges(ps_mesh, vertices, boundEdges):
-    boundVertices = vertices[boundEdges]
-
-    boundVertices = boundVertices.reshape(2 * boundVertices.shape[0], 3)
-    curveNetIndices = np.arange(0, boundVertices.shape[0])
-    curveNetIndices = curveNetIndices.reshape(int(len(curveNetIndices) / 2), 2)
-    ps_net = ps.register_curve_network("boundary edges", boundVertices, curveNetIndices)
-
-    return ps_net
-
-
+#Helper function for compute_topological_quantities---ignore
 def createEH(edges, halfedges):
     # Create dictionaries to map halfedges to their indices
     halfedges_dict = {(v1, v2): i for i, (v1, v2) in enumerate(halfedges)}
@@ -79,7 +78,12 @@ def createEH(edges, halfedges):
     return EH
 
 
-def compute_edge_list(vertices, faces, sortBoundary=False):
+#input: vertices and faces (see documentation for compute_geometric_quantities())
+#output:
+# halfedges: 3|F| x 2 indices to all pairs F(i), F(i+1 mod 3) of halfedges per face
+# edges: |E| x2 the unique edges, with indices (source, target) for vertices in each row.
+# EF: |E|x2 list of (left, right) faces to each edge
+def compute_topological_quantities(vertices, faces):
     halfedges = np.empty((3 * faces.shape[0], 2))
     for face in range(faces.shape[0]):
         for j in range(3):
@@ -100,47 +104,36 @@ def compute_edge_list(vertices, faces, sortBoundary=False):
     # EF = []
 
     EH = createEH(edges, halfedges)
-    EF = np.column_stack((EH[:, 0] // 3, (EH[:, 0] + 2) % 3, EH[:, 1] // 3, (EH[:, 1] + 2) % 3))
+    EF = EH // 3
 
-    if (sortBoundary):
-        loop_order = []
-        loopEdges = boundEdges.tolist()
-        current_node = boundVertices[0]  # Start from any node
-        visited = set()
-        while True:
-            loop_order.append(current_node)
-            visited.add(current_node)
-            next_nodes = [node for edge in loopEdges for node in edge if
-                          current_node in edge and node != current_node and node not in visited]
-            if not next_nodes:
-                break
-            next_node = next_nodes[0]
-            loopEdges = [edge for edge in loopEdges if
-                         edge != (current_node, next_node) and edge != (next_node, current_node)]
-            current_node = next_node
-            current_node = next_node
-
-        boundVertices = np.array(loop_order)
-
-    return halfedges, edges, edgeBoundMask, boundVertices, EH, EF
+    return halfedges, edges,EF
 
 
-def extrinsic_to_power(N, field, inFaces, basisX, basisY):
-    field2D = np.sum(field * basisX[inFaces, :], axis=1) + 1j * np.sum(field * basisY[inFaces, :], axis=1)
-    field2D = np.exp(np.log(field2D.reshape(-1, 1)) * N)
-    return field2D
+#Input:
+# N: symmetry order (should always be given 4 in this tutorial)
+# inFaces: list of indices into faces (or here into basisX and basisY) of faces that have a vector to be converted
+# extField: |inFaces|x3 (double) tangent single vector field in each of the "inFaces" (the "u" in the slides)
+# basisX, basisY: each |F|x3 of the face-based tangent basis vectors
+#Output:
+# powerField: a complex |inFaces|x1 array of the powerfield (X=u^N)
+def extrinsic_to_power(N, inFaces, extField, basisX, basisY):
+    complexField = np.sum(field * basisX[inFaces, :], axis=1) + 1j * np.sum(field * basisY[inFaces, :], axis=1)
+    powerField = np.exp(np.log(complexField.reshape(-1, 1)) * N)
+    return powerField
 
-
-def power_to_extrinsic(N, powerField, inFaces, basisX, basisY):
+#the inverse function to that above, with same type of parameters
+def power_to_extrinsic(N, inFaces, powerField, basisX, basisY):
     extField = np.zeros([powerField.shape[0], 3 * N])
     repField = np.exp(np.log(powerField) / N)
     for i in range(0, N):
         currField = repField * cmath.exp(2 * i * cmath.pi / N * 1j)
-        extField[:, 3 * i:3 * i + 3] = np.real(currField) * basisX + np.imag(currField) * basisY
+        extField[:, 3 * i:3 * i + 3] = np.real(currField) * basisX[inFaces,:] + np.imag(currField) * basisY[inFaces,:]
 
     return extField
 
 
+#Input: vertices and faces like the above
+#Output: |V|x1 array of angle defects per vertex (discrete Gaussian curvature)
 def compute_angle_defect(vertices, faces):
     vi = vertices[faces[:, 0], :]
     vj = vertices[faces[:, 1], :]
@@ -157,6 +150,10 @@ def compute_angle_defect(vertices, faces):
     return angleDefect
 
 
+#Input: as explained above
+#Output:
+# singVertices: a |S|x1 array (|S| - number of singular vertices) of indices into "vertices" of singular vertices
+# singIndices: a |S|x1 integer array of singularity indices, where the true fractional index is singIndices/N (you don't need to explicitly compute the fractional index)
 def get_singularities(N, powerField, vertices, faces, edges, basisX, basisY):
     # angle defect
     K = compute_angle_defect(vertices, faces).reshape(-1,1)
@@ -210,11 +207,11 @@ if __name__ == '__main__':
 
     vertices, faces = load_off_file(os.path.join('..', 'data', 'fandisk.off'))
 
-    normals, faceAreas, basisX, basisY = compute_face_quantities(vertices, faces)
+    normals, faceAreas, basisX, basisY = compute_geometric_quantities(vertices, faces)
 
-    halfedges, edges, edgeBoundMask, boundVertices, EH, EF = compute_edge_list(vertices, faces)
+    halfedges, edges, edgeBoundMask, boundVertices, EH, EF = compute_combinatorial_quantities(vertices, faces)
 
-    N = 4
+    N = 4  #keep this fixed! it means cross field
     constFaces = [1, 1000, 2000, 3000]
 
     # set to the first edge of each face
