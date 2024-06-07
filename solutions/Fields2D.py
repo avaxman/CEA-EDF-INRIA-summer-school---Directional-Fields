@@ -2,7 +2,7 @@ import os
 import polyscope as ps
 import polyscope.imgui as psim
 import numpy as np
-from scipy.sparse import coo_matrix, csc_matrix
+from scipy.sparse import coo_matrix, csc_matrix, diags
 from scipy.sparse.linalg import spsolve
 import cmath
 
@@ -102,9 +102,6 @@ def compute_topological_quantities(vertices, faces):
     boundEdges = edges[edgeBoundMask == 1, :]
     boundVertices = np.unique(boundEdges).flatten()
 
-    # EH = [np.where(np.sort(halfedges, axis=1) == edge)[0] for edge in edges]
-    # EF = []
-
     EH = createEH(edges, halfedges)
     EF = EH // 3
 
@@ -128,6 +125,7 @@ def extrinsic_to_power(N, inFaces, extField, basisX, basisY):
 def power_to_extrinsic(N, inFaces, powerField, basisX, basisY):
     extField = np.zeros([powerField.shape[0], 3 * N])
     repField = np.exp(np.log(powerField) / N)
+    repField /= np.linalg.norm(repField, axis=1, keepdims=True)
     for i in range(0, N):
         currField = repField * cmath.exp(2 * i * cmath.pi / N * 1j)
         extField[:, 3 * i:3 * i + 3] = np.real(currField) * basisX[inFaces, :] + np.imag(currField) * basisY[inFaces, :]
@@ -169,7 +167,7 @@ def get_singularities(N, powerField, vertices, faces, edges, basisX, basisY):
 
     # computing effort
     edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
-    edgeVectorsFace1 = extrinsic_to_power(N,  EF[:, 0], edgeVectors, basisX, basisY)
+    edgeVectorsFace1 = extrinsic_to_power(N, EF[:, 0], edgeVectors, basisX, basisY)
     edgeVectorsFace2 = extrinsic_to_power(N, EF[:, 1], edgeVectors, basisX, basisY)
 
     expEffort = (powerField[EF[:, 1]] * np.conj(edgeVectorsFace2)) / (powerField[EF[:, 0]] * np.conj(edgeVectorsFace1))
@@ -186,13 +184,18 @@ def get_singularities(N, powerField, vertices, faces, edges, basisX, basisY):
 #   constPowerField: a |constFaces|x1 complex array of prescribed power field 1-1 corresponding to constFaces
 # Output:
 #   powerField: the full |F|x1 complex power field, including the constPowerField as a subset within the constFaces positions
-def interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edges, EF, basisX, basisY):
+def interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edges, EF, faceAreas, basisX, basisY):
     # creating the connection
     edgeVectors = vertices[edges[:, 1], :] - vertices[edges[:, 0], :]
     edgeVectorsFace1 = extrinsic_to_power(N, EF[:, 0], edgeVectors, basisX, basisY)
     edgeVectorsFace2 = extrinsic_to_power(N, EF[:, 1], edgeVectors, basisX, basisY)
 
     # preparing constraints and linear system
+
+    # diagonal mass matrix for the edges
+    le = np.linalg.norm(vertices[edges[:, 1], :] - vertices[edges[:, 0], :], axis=1)
+    Ae = faceAreas[EF[:, 1]] + faceAreas[EF[:, 0]]
+    M = diags(3 * (le ** 2) / Ae, format='csr')
     rows = np.column_stack((np.arange(0, edges.shape[0]), np.arange(0, edges.shape[0])))
     cols = EF
     values = np.column_stack([-np.conj(edgeVectorsFace1), np.conj(edgeVectorsFace2)])
@@ -204,7 +207,7 @@ def interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edg
     b = -AConst * constPowerField
     powerField = np.zeros([faces.shape[0], 1], dtype=np.complex128)
     powerField[constFaces] = constPowerField
-    powerField[varFaces] = spsolve(np.dot(np.conj(AVar.T), AVar), np.conj(AVar.T).dot(b)).reshape(-1, 1)
+    powerField[varFaces] = spsolve(np.dot(np.conj(AVar.T @ M), AVar), np.conj(AVar.T @ M).dot(b)).reshape(-1, 1)
 
     return powerField
 
@@ -217,14 +220,17 @@ def get_biggest_dihedral(cutoffPercent, vertices, edges, EF, faces, normals):
     dihedralAngle = np.arccos(np.clip(cosDihedrals, -1, 1))
 
     # getting top 5% in absolute value
-    topPercent = int(np.ceil(cutoffPercent/100.0 * len(dihedralAngle)))
+    topPercent = int(np.ceil(cutoffPercent / 100.0 * len(dihedralAngle)))
 
     threshold = np.partition(np.abs(dihedralAngle), -topPercent)[-topPercent]
 
     # Find the 5% sharpest edges and allocating the edge vectors to the adjacent faces
     constEdges = np.where(np.abs(dihedralAngle) >= threshold)[0]
     constFaces = np.reshape(EF[constEdges, :], (2 * len(constEdges), 1)).flatten()
-    extField = np.reshape(np.tile(vertices[edges[constEdges, 1], :] - vertices[edges[constEdges, 0], :], (1, 2)), (2 * len(constEdges), 3))
+    extField = np.reshape(np.tile(vertices[edges[constEdges, 1], :] - vertices[edges[constEdges, 0], :], (1, 2)),
+                          (2 * len(constEdges), 3))
+
+    extField /= np.linalg.norm(extField, axis=1, keepdims=True)
 
     return constFaces, extField
 
@@ -238,13 +244,14 @@ if __name__ == '__main__':
     N = 4  # keep this fixed! it means "cross field"
 
     # constraining the %5 of the faces with the highest dihedral angle
-    constFaces, constExtField = get_biggest_dihedral(3, vertices, edges, EF, faces, normals)
+    constFaces, constExtField = get_biggest_dihedral(1, vertices, edges, EF, faces, normals)
 
     # getting the constrained power field (Xconst = uconst^4, and in complex coordinates)
     constPowerField = extrinsic_to_power(N, constFaces, constExtField, basisX, basisY)
 
     # Interpolating the field to all other faces
-    fullPowerField = interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edges, EF, basisX, basisY)
+    fullPowerField = interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edges, EF, faceAreas,
+                                             basisX, basisY)
 
     # Getting back the extrinsic R^3 field
     extField = power_to_extrinsic(N, range(0, faces.shape[0]), fullPowerField, basisX, basisY)
@@ -257,12 +264,14 @@ if __name__ == '__main__':
     ps_mesh = ps.register_surface_mesh("Mesh", vertices, faces)
 
     for i in range(0, 4):
-        ps_mesh.add_vector_quantity("Full Power Field" + str(i), extField[:, 3 * i:3 * i + 3], defined_on='faces')
+        ps_mesh.add_vector_quantity("Full Power Field" + str(i), extField[:, 3 * i:3 * i + 3], defined_on='faces',
+                                    enabled=False, length=0.01)
 
     ps_cloud = ps.register_point_cloud("Singularities", vertices[singVertices, :])
-    ps_cloud.add_scalar_quantity("Indices", singIndices.flatten(), vminmax=(-N, N), enabled=True)
+    ps_cloud.add_scalar_quantity("Indices", singIndices.flatten(), vminmax=(-N, N), enabled=False)
 
     ps_cloud = ps.register_point_cloud("Constrained Faces", barycenters[constFaces, :])
-    ps_cloud.add_vector_quantity("Input Field", constExtField)
+    ps_cloud.set_radius(0.0)
+    ps_cloud.add_vector_quantity("Input Field", constExtField, enabled=True)
 
     ps.show()
