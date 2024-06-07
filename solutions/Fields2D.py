@@ -209,26 +209,23 @@ def interpolate_power_field(N, constFaces, constPowerField, vertices, faces, edg
     return powerField
 
 
-# helper function that returns the 5-percent faces with the biggest dihedral angle to their neighbors, and the consequent edge between them
+# helper function that returns the highest-percent faces with the biggest dihedral angle to their neighbors, and the consequent edge between them
 # Nothing for you to implement here
-def get_biggest_dihedral(vertices, edges, EF, faces, normals):
+def get_biggest_dihedral(cutoffPercent, vertices, edges, EF, faces, normals):
     # Computing all dihedral angles
     cosDihedrals = np.sum(normals[EF[:, 0], :] * normals[EF[:, 1], :], axis=1)
     dihedralAngle = np.arccos(np.clip(cosDihedrals, -1, 1))
 
     # getting top 5% in absolute value
-    top5Percent = int(np.ceil(0.05 * len(dihedralAngle)))
+    topPercent = int(np.ceil(cutoffPercent/100.0 * len(dihedralAngle)))
 
-    threshold = np.partition(np.abs(dihedralAngle), -top5Percent)[-top5Percent]
+    threshold = np.partition(np.abs(dihedralAngle), -topPercent)[-topPercent]
 
     # Find the 5% sharpest edges and allocating the edge vectors to the adjacent faces
     constEdges = np.where(np.abs(dihedralAngle) >= threshold)[0]
     constFaces = np.reshape(EF[constEdges, :], (2 * len(constEdges), 1)).flatten()
     extField = np.reshape(np.tile(vertices[edges[constEdges, 1], :] - vertices[edges[constEdges, 0], :], (1, 2)), (2 * len(constEdges), 3))
 
-    #checking normals are orthogonal to field
-    # constNormals = normals[constFaces,:]
-    # fieldNormalDot = np.sum(constNormals * extField, axis = 1)
     return constFaces, extField
 
 
@@ -241,7 +238,7 @@ if __name__ == '__main__':
     N = 4  # keep this fixed! it means "cross field"
 
     # constraining the %5 of the faces with the highest dihedral angle
-    constFaces, constExtField = get_biggest_dihedral(vertices, edges, EF, faces, normals)
+    constFaces, constExtField = get_biggest_dihedral(3, vertices, edges, EF, faces, normals)
 
     # getting the constrained power field (Xconst = uconst^4, and in complex coordinates)
     constPowerField = extrinsic_to_power(N, constFaces, constExtField, basisX, basisY)
@@ -252,12 +249,12 @@ if __name__ == '__main__':
     # Getting back the extrinsic R^3 field
     extField = power_to_extrinsic(N, range(0, faces.shape[0]), fullPowerField, basisX, basisY)
 
-    # Extracting ingularities
+    # Extracting singularities
     singVertices, singIndices = get_singularities(4, fullPowerField, vertices, faces, edges, basisX, basisY)
 
     # PolyScope visualization - nothing to do here
     ps.init()
-    ps_mesh = ps.register_surface_mesh("Hello World Mesh", vertices, faces)
+    ps_mesh = ps.register_surface_mesh("Mesh", vertices, faces)
 
     for i in range(0, 4):
         ps_mesh.add_vector_quantity("Full Power Field" + str(i), extField[:, 3 * i:3 * i + 3], defined_on='faces')

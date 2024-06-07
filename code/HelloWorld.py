@@ -2,6 +2,9 @@ import os
 import polyscope as ps
 import polyscope.imgui as psim
 import numpy as np
+from scipy.sparse import coo_matrix, csc_matrix
+from scipy.sparse.linalg import spsolve
+import cmath
 
 
 
