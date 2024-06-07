@@ -169,3 +169,13 @@ code/.idea/modules.xml
 code/.idea/vcs.xml
 code/.idea/inspectionProfiles/profiles_settings.xml
 code/.idea/inspectionProfiles/Project_Default.xml
+solutions/.polyscope.ini
+solutions/imgui.ini
+solutions/.idea/.gitignore
+solutions/.idea/.name
+solutions/.idea/code.iml
+solutions/.idea/misc.xml
+solutions/.idea/modules.xml
+solutions/.idea/vcs.xml
+solutions/.idea/inspectionProfiles/profiles_settings.xml
+solutions/.idea/inspectionProfiles/Project_Default.xml
