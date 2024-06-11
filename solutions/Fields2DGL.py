@@ -230,12 +230,8 @@ def interpolate_power_field_GL(N, constFaces, constPowerField, vertices, faces, 
     fied = np.min(np.real(eigenvalues))
     for currIter in range(0,numGLIterations):
         #implicit smoothing
-        #for smoothIter in range(0,smoothIterations):
-        #    grad = invMf @ np.conj(AVar.T @ M) @ (AVar @ powerField[varFaces]-b)
-        #    powerField[varFaces] -= 0.01 * grad
         powerField = spsolve(Mf + (mu/fied) * np.dot(np.conj(fullMat.T @ fullM), fullMat), Mf @ powerField + (mu/fied)* np.conj(fullMat.T @ fullM).dot(fullRhs)).reshape(-1, 1)
-       # powerField[constFaces] = constPowerField
-        #powerField = spsolve(MfFull + (mu/fied) * np.dot(np.conj(A.T @ M), A), MfFull @ powerField).reshape(-1, 1)
+        #normalization
         powerField /= np.abs(powerField)
 
     return initPowerField, powerField
@@ -268,7 +264,6 @@ if __name__ == '__main__':
 
     # Loading and initializing
     vertices, faces = load_off_file(os.path.join('..', 'data', 'genus3.off'))
-    # vertices = (vertices-np.min(vertices, axis=0))/(np.max(vertices, axis=0)-np.min(vertices, axis=0))
     halfedges, edges, EF = compute_topological_quantities(vertices, faces)
     normals, faceAreas, barycenters, basisX, basisY = compute_geometric_quantities(vertices, faces)
     N = 4  # keep this fixed! it means "cross field"
